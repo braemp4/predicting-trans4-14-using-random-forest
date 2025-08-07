@@ -1,0 +1,322 @@
+---
+jupyter: python3
+
+---
+## Predicting Myeloma Cytogenics
+#### Importing packages
+```{python}
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import sklearn
+import openpyxl
+```
+
+```{python}
+rna_seq_df = pd.read_csv("data/BW_RawData_CPM.csv")
+microarray_df = pd.read_csv("data/BW_GSE16400_expression.csv")
+mm_output_df = pd.read_excel("data/BW_patientdata.xlsx")
+gse_output_df = pd.read_csv("data/BW_GSE16400_clin.csv")
+```
+
+#### Merging rnaseq and microarray dataframes
+```{python}
+
+
+rna_seq_df.dropna()
+microarray_df.dropna()
+
+merged_df = rna_seq_df.merge(microarray_df)
+gene_names = merged_df[merged_df.columns[0]]
+index_name = merged_df.iloc[0][0]
+
+merged_df.drop(merged_df.columns[0], axis=1, inplace=True)
+merged_df = merged_df.rename(index = gene_names) #type: ignore
+merged_df.dropna()
+
+
+rs_genes = rna_seq_df[rna_seq_df.columns[0]]
+rs_index = rna_seq_df.iloc[0][0]
+rna_seq_df.drop(rna_seq_df.columns[0], axis=1, inplace=True)
+rna_seq_df = rna_seq_df.rename(index = rs_genes) #type: ignore
+
+
+ma_genes = microarray_df[microarray_df.columns[0]] #type: ignore
+ma_index = microarray_df.iloc[0][0]
+microarray_df.drop(microarray_df.columns[0], axis=1, inplace=True)
+microarray_df = microarray_df.rename(index = ma_genes) #type: ignore
+```
+
+#### Plotting Umap of expresion data
+We'll make a umap plot for:
+- Rnaseq expression
+- Microarray expression
+- Merged (rnaseq + microarray) expression
+
+```{python}
+import umap
+rna_seq_df = rna_seq_df.transpose()
+reducer = umap.UMAP()
+embedding = reducer.fit_transform(rna_seq_df)
+
+plt.scatter(embedding[:, 0],embedding[:,1]) #type: ignore 
+
+plt.title("Rnaseq umap")
+
+
+```
+
+
+
+#### Merging output data
+```{python}
+#Helper function to find patients with "missing" label
+def get_samples_with_label(df, label, with_l):
+	df_index = list(df.index)
+	if with_l == True:
+		has_label = []
+		for s in df_index:
+			if df.loc[s][0] == label:
+				has_label.append(s)
+		return has_label
+	elif with_l == False:
+		not_label =[]
+		for s in df_index:
+			if df.loc[s][0] != label:
+				not_label.append(s)
+		return not_label
+
+def drop_samples_with_label(df, label, with_l):
+	df_index = list(df.index)
+	if with_l:
+		for s in df_index:
+			if df.loc[s][0] == label:
+				df.drop(index=s, inplace= True)
+	elif not with_l:
+		for s in df_index:
+			if df.loc[s][0] != label:
+				df.drop(index=s, inplace = True)
+
+def drop_samples_in_x(df, samples):
+	#We want to loop through samples we found with the missing label and remove them from merged df
+	for s in samples:
+		df.drop(s, inplace = True)
+#Making dataframes from the trans 4:14 column
+mm_trans_414_index = pd.Series(mm_output_df["PUBLIC_ID"])
+gse_trans_414_index = pd.Series(gse_output_df["Unnamed: 0"])
+
+mm_trans_414 = pd.Series(mm_output_df["Trans_414"])
+gse_trans_414 = pd.Series(gse_output_df["Clinical_FISH_t414"])
+
+mm_414_df = pd.DataFrame(list(mm_trans_414), list(mm_trans_414_index))
+gse_414_df = pd.DataFrame(list(gse_trans_414), list(gse_trans_414_index))
+
+#Making labels either 0 or 1
+gse_414_df = gse_414_df.replace({"FALSE": 0, "TRUE": 1, "0": 0, "1": 1})
+mm_414_df = mm_414_df.replace({"Not Detected": 0, "Detected": 1})
+
+with_missing = get_samples_with_label(mm_414_df, "Missing",True)
+print(with_missing)
+not_missing = get_samples_with_label(mm_414_df, "Missing", False)
+
+
+output_df = pd.concat([mm_414_df, gse_414_df])
+
+
+drop_samples_with_label(output_df, "Missing", True) 
+print(output_df)
+
+
+merged_df = merged_df.transpose()
+drop_samples_in_x(merged_df, with_missing)
+
+
+```
+
+
+### Batch correcting expression data
+Since we merged the rna seq and microarray data, we need to account for batch effects due to rna seq and microarray being different data collection methods. \
+Pycombat_seq takes two main arguements, the data we wish to batch correct and a list/set/series to label samples from the two experimental cohorts.
+
+
+#### Labelling samples
+
+Labelling rnaseq samples as "2015" and microarray samples as "1970". The label names are arbitrary.
+```{python}
+
+drop_samples_with_label(mm_414_df, "Missing", True)
+
+bat_corr_rna = []
+print(mm_414_df)
+
+for i in range(len(mm_414_df)):
+    bat_corr_rna.append(2015)
+print(bat_corr_rna[0:5])
+
+bat_corr_mic = []
+for i in range(len(gse_414_df)):
+    bat_corr_mic.append(1970)
+print(bat_corr_mic[0:5])
+
+bat_corr_list = []
+for entry in bat_corr_rna:
+    bat_corr_list.append(entry)
+for entry in bat_corr_mic:
+    bat_corr_list.append(entry)
+print()
+print(bat_corr_list[::20])
+
+output_df = pd.concat([mm_414_df, gse_414_df])
+output_df = output_df.assign(bat_corr = bat_corr_list)
+```
+#### Running combat_seq
+```{python}
+
+from inmoose.pycombat import pycombat_seq
+merged_df = pycombat_seq(merged_df.transpose().astype("float64"), output_df["bat_corr"])
+
+```
+
+```{python}
+merged_df = merged_df.transpose()
+print(merged_df)
+
+```
+
+```{python}
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(merged_df, output_df[0], test_size=0.2, random_state = 101)
+```
+
+```{python}
+
+
+
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+from sklearn.preprocessing import LabelEncoder 
+le = LabelEncoder()
+y_train = le.fit_transform(y_train)
+y_test = le.transform(y_test)
+print(le.classes_) #0, 1
+
+
+```
+
+```{python}
+from sklearn.ensemble import RandomForestClassifier 
+
+n_estimators = [int(x) for x in np.linspace(start = 10, stop = 80, num = 10)]
+
+max_features = ['sqrt', 'log2']
+
+max_depth = [2,4]
+
+min_samples_split = [2,5]
+
+min_samples_leaf = [1,2]
+
+bootstrap = [True, False]
+
+param_grid = {'n_estimators' : n_estimators,
+              'max_features': max_features,
+              'max_depth': max_depth,
+              'min_samples_split': min_samples_split,
+              'min_samples_leaf' : min_samples_leaf,
+              'bootstrap': bootstrap
+              
+              }
+
+rf_prelim = RandomForestClassifier()
+rf_prelim.fit(X_train_scaled, y_train)
+
+
+```
+
+```{python}
+from sklearn.model_selection import GridSearchCV
+rf_model = GridSearchCV(estimator=rf_prelim, param_grid=param_grid, cv=3, verbose=2, n_jobs = 4)
+rf_model.fit(X_train_scaled, y_train)
+
+
+```
+
+
+```{python}
+
+
+y_pred = rf_model.predict(X_test_scaled)
+y_train_pred = rf_model.predict(X_train_scaled)
+train_probs = rf_model.predict_proba(X_train_scaled)[:,1]
+probs = rf_model.predict_proba(X_test_scaled)[:,1]
+
+from sklearn.metrics import accuracy_score
+print(rf_model.score(X_train_scaled, y_train))
+print(rf_model.score(X_test_scaled, y_test))
+
+
+```
+
+```{python}
+
+from sklearn.metrics import classification_report
+print(classification_report(y_test,y_pred))
+
+
+```
+
+```{python}
+from sklearn.metrics import roc_auc_score, roc_curve
+
+print(roc_auc_score(y_train, train_probs))
+print(roc_auc_score(y_test, y_pred))
+
+```
+
+```{python}
+from sklearn.model_selection import GridSearchCV
+rf_noscaling = RandomForestClassifier()
+
+
+rf_noscaling = GridSearchCV(estimator = rf_noscaling, param_grid = param_grid, cv=3, verbose=2,n_jobs=4)
+rf_noscaling.fit(X_train, y_train)
+
+
+```
+
+```{python}
+
+y_pred_ns = rf_noscaling.predict(X_test)
+y_train_pred_ns = rf_noscaling.predict(X_train)
+train_probs_ns = rf_noscaling.predict_proba(X_train)[:,1]
+probs_ns = rf_noscaling.predict_proba(X_test)[:,1]
+
+from sklearn.metrics import accuracy_score
+print(rf_noscaling.score(X_train, y_train))
+print(rf_noscaling.score(X_test, y_test))
+```
+
+```{python}
+from sklearn.metrics import classification_report
+print(classification_report(y_test,y_pred_ns))
+```
+
+```{python}
+
+from sklearn.metrics import roc_auc_score, roc_curve
+
+print(roc_auc_score(y_train, train_probs_ns))
+print(roc_auc_score(y_test, y_pred_ns))
+```
+
+
+
+
+
+
+
+
