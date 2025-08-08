@@ -1,0 +1,70 @@
+---
+jupyter: python3
+
+---
+## Predicting Myeloma Cytogenics
+#### Importing packages
+```{python}
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import sklearn
+import openpyxl
+```
+
+```{python}
+rna_seq_df = pd.read_csv("data/BW_RawData_CPM.csv")
+microarray_df = pd.read_csv("data/BW_GSE16400_expression.csv")
+mm_output_df = pd.read_excel("data/BW_patientdata.xlsx")
+gse_output_df = pd.read_csv("data/BW_GSE16400_clin.csv")
+```
+
+#### Merging rnaseq and microarray dataframes
+```{python}
+
+
+rna_seq_df.dropna()
+microarray_df.dropna()
+
+merged_df = rna_seq_df.merge(microarray_df)
+gene_names = merged_df[merged_df.columns[0]]
+index_name = merged_df.iloc[0][0]
+
+merged_df.drop(merged_df.columns[0], axis=1, inplace=True)
+merged_df = merged_df.rename(index = gene_names) #type: ignore
+merged_df.dropna()
+
+
+rs_genes = rna_seq_df[rna_seq_df.columns[0]]
+rs_index = rna_seq_df.iloc[0][0]
+rna_seq_df.drop(rna_seq_df.columns[0], axis=1, inplace=True)
+rna_seq_df = rna_seq_df.rename(index = rs_genes) #type: ignore
+
+
+ma_genes = microarray_df[microarray_df.columns[0]] #type: ignore
+ma_index = microarray_df.iloc[0][0]
+microarray_df.drop(microarray_df.columns[0], axis=1, inplace=True)
+microarray_df = microarray_df.rename(index = ma_genes) #type: ignore
+```
+
+#### Plotting Umap of expresion data
+We'll make a umap plot for:
+- Rnaseq expression
+- Microarray expression
+- Merged (rnaseq + microarray) expression
+
+```{python}
+import umap
+
+merged_df = merged_df.transpose()
+reducer = umap.UMAP()
+embedding = reducer.fit_transform(merged_df)
+
+plt.scatter(embedding[:, 0],embedding[:,1]) #type: ignore 
+
+plt.title("Rnaseq umap")
+
+
+```
+
+
