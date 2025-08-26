@@ -1,0 +1,346 @@
+
+### Differential expression analysis 
+
+##### Importing Packages
+```{python}
+import numpy as np
+import pandas as pd 
+from matplotlib import pyplot as plt 
+import json
+import seaborn as sns
+
+#pydeseq2 objects
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+#gene mapper 
+from gene_mapper import GeneScraper 
+
+#GSEA
+import gseapy as gp
+from gseapy import Biomart
+```
+
+##### Data wrangling
+
+```{python}
+rna_seq_df = pd.read_csv("data/raw_rnaseq.csv")
+
+ids = rna_seq_df["Unnamed: 0"] 
+
+rna_seq_df = rna_seq_df.rename(index = ids) #type: ignore
+rna_seq_df = rna_seq_df.drop(rna_seq_df.columns[0], axis=1)
+
+print("Removing features with count sums less than zero")
+print(rna_seq_df.shape)
+rna_seq_df = rna_seq_df[rna_seq_df.sum(axis = 1) > 0]
+print(rna_seq_df.shape)
+
+
+#Patient labels from model and fish
+with open("data/patient-labels-deseq.json", "r") as file:
+    patient_labels = json.load(file)
+
+patient_labels_rs = {}
+for label in patient_labels:
+    if label[0] == "M":
+        patient_labels_rs.update({label: patient_labels[label]})
+
+```
+
+###### Groups to run differential expression analysis on
+- +ve fish and -ve model VS. -ve fish +ve model
+- (properly labelled) +ve fish and +ve model VS. Improperly labelled 
+- (properly labelled) -ve fish and -ve model VS. Improperly labelled 
+
+- New: -ve fish and -ve model VS. -ve fish +ve model 
+Why?: what exactly is upreg/downreg in patients labelled +ve by ML model and NOT by Fish. In otherwords, if the model the was only metric for flagging the t414 event, what genes are upreg/downreg 
+
+```{python}
+def group_diff(d, q1, q2):
+  '''
+  d = dictionary
+  q1 and q2 should be binary pairs
+  '''
+  group_a = []
+  group_b = []
+
+  for i, v in d.items():
+    if v == q1:
+      group_a.append(i)
+    elif v == q2:
+      group_b.append(i)
+
+  return group_a, group_b
+
+def group_improper(d):
+    improper = []
+    for i,v in d.items():
+        if v[0] != v[1]:
+            improper.append(i)
+    return improper
+
+
+#group_1a vs. group_1b
+group_1a, group_1b = group_diff(patient_labels_rs, [1,0], [0,1])
+
+#group_2a vs. group_2b
+group_2a = group_diff(patient_labels_rs, [1, 1], [0, 1])[0]
+group_2b = group_improper(patient_labels_rs)
+
+#group_3a vs. group_3b 
+group_3a = group_diff(patient_labels_rs, [0, 0], [0, 1])[0]
+#group_3a is very large
+
+group_3b = group_improper(patient_labels_rs)
+
+group_4a, group_4b = group_diff(patient_labels_rs, [0,0], [0,1])
+
+```
+
+###### Getting counts_df
+```{python}
+def get_counts(group_a, group_b, rna_seq_df):
+  counts_a = rna_seq_df[group_a]
+  counts_b = rna_seq_df[group_b]
+
+  counts_a = counts_a.astype("int")
+  counts_b = counts_b.astype("int")
+
+  counts_df = pd.concat([counts_a.transpose(), counts_b.transpose()]) 
+
+  return counts_df, counts_a, counts_b
+  
+```
+
+###### Getting metadata_df 
+```{python}
+def get_metadata(counts_a, counts_b):
+   
+  group_a_annotation = []
+  for sample in counts_a.columns:
+      group_a_annotation.append("A")
+  group_b_annotation = []
+  for sample in counts_b.columns:
+      group_b_annotation.append("B")
+
+  metadata_a = pd.DataFrame(data = group_a_annotation, index = counts_a.columns)
+  metadata_b = pd.DataFrame(data = group_b_annotation, index = counts_b.columns) 
+
+  metadata_df = pd.concat([metadata_a, metadata_b])
+  metadata_df = metadata_df.rename(columns = {0: "test_group"})
+
+  return metadata_df
+
+``` 
+#### Get gene names - using gseapy's Biomart wrapper 
+
+```{python}
+bm = Biomart()
+
+def get_genes(ids):
+  #ids should be some kind of list or series
+  queries = {"ensembl_gene_id": ids }
+  results = bm.query(dataset="hsapiens_gene_ensembl",attributes=["ensembl_gene_id", "external_gene_name"], filters=queries)
+
+  return results 
+
+
+```
+
+###### pydeseq2 on counts and metadata
+
+```{python}
+def run_deseq(counts_df, metadata_df, fetch_genes: bool):
+  dds = DeseqDataSet(counts=counts_df, metadata=metadata_df, design = "test_group", refit_cooks= True)
+
+  dds.deseq2()
+
+  results = DeseqStats(dds, n_cpus=8, contrast = ("test_group", "B", "A"))
+
+  results.summary()
+
+  results_df = results.results_df
+
+  results_df = results_df[results_df.baseMean >= 10]
+
+
+
+  sigs = results_df[(results_df.padj < 0.05) & (abs(results_df.log2FoldChange) > 0.5 )]
+
+  if fetch_genes:
+    gene_ids = sigs.index
+    
+    print("Fetching names for differentially expressed genes...")
+    gene_mapper = GeneScraper(gene_ids)
+
+    gene_names = gene_mapper.get_gene_names()
+
+    print("Gene names obtained")
+
+    sigs["gene_names"] = gene_names
+
+  print("Genes: ",sigs.shape)
+  return sigs 
+
+
+```
+
+
+###### Making Volcano plot 
+```{python}
+def map_color(a, lfc_thresh: int = 1, nlog10_thresh: int = 2):
+    
+    log2FoldChange, nlog10 = a 
+
+    if abs(log2FoldChange) < lfc_thresh or nlog10 < nlog10_thresh:
+        return "low"
+    return "high"
+
+def map_color_2(a, lfc_thresh: int = 1, nlog10_thresh: int = 2):
+    
+    log2FoldChange, nlog10 = a 
+
+    if log2FoldChange < (-1*lfc_thresh) and nlog10 > nlog10_thresh:
+        return "high-down"
+    
+    elif log2FoldChange > (lfc_thresh) and nlog10 > nlog10_thresh:
+        return "high-up"
+    return "low"
+def vol_plot(sigs, label_genes: bool = False, hor_line: int = 2, vert_line_r: int = 1, vert_line_l: int = -1):
+  sigs["nlog10"] = -np.log10(sigs.padj) 
+  sigs["color"] = sigs[["log2FoldChange","nlog10"]].apply(map_color_2, axis=1) 
+
+
+  sigs.to_csv("data/deseq_analysis_2_data.csv")
+
+
+  plt.figure(figsize = (8,8)) 
+  ax = sns.scatterplot(data = sigs, x = "log2FoldChange", y='nlog10', hue = "color", hue_order = ["low","high-down", "high-up"], palette = ["lightgrey", "mediumslateblue", "indianred"])
+  if label_genes: 
+    #adding gene name to each plot point 
+    for i, v in sigs.iterrows():
+        if v["nlog10"] >  5:
+            ax.text(v["log2FoldChange"], v["nlog10"],v["gene_names"], fontsize=6, ha="right")
+
+  ax.axhline(hor_line, zorder = 0, c= "k", lw=1, ls= "--")
+  ax.axvline(vert_line_r, zorder = 0, c= "k", lw=1, ls= "--")
+  ax.axvline(vert_line_l, zorder = 0, c= "k", lw=1, ls= "--")
+
+  plt.show()
+   
+```
+
+##### Running analysis on +ve fish, -ve mode VS -ve fish, +ve model
+```{python}
+counts1_df, counts_1a, counts_1b = get_counts(group_1a, group_1b, rna_seq_df)
+metadata1_df = get_metadata(counts_1a, counts_1b)
+
+sigs_1 = run_deseq(counts1_df, metadata1_df, fetch_genes=True)
+#my gene map tool is practical for genes < 700
+
+vol_plot(sigs_1, label_genes=True)
+
+```
+
+
+##### Running analysis on +ve fish, +ve mode VS Improperly labelled
+```{python}
+
+counts2_df, counts_2a, counts_2b = get_counts(group_2a, group_2b, rna_seq_df)
+metadata2_df = get_metadata(counts_2a, counts_2b)
+
+sigs_2 = run_deseq(counts2_df, metadata2_df, fetch_genes=True)
+vol_plot(sigs_2, label_genes=True)
+
+```
+
+
+##### Running analysis on -ve fish, -ve model VS Improperly labelled
+```{python}
+
+counts3_df, counts_3a, counts_3b = get_counts(group_3a, group_3b, rna_seq_df)
+metadata3_df = get_metadata(counts_3a, counts_3b)
+
+sigs_3 = run_deseq(counts3_df, metadata3_df, fetch_genes=False)
+vol_plot(sigs_3, label_genes=False)
+
+```
+
+
+##### Running analysis on -ve fish, -ve model (both negative) VS -ve fish +ve ML
+
+```{python}
+
+counts4_df, counts_4a, counts_4b = get_counts(group_4a, group_4b, rna_seq_df)
+metadata4_df = get_metadata(counts_4a, counts_4b)
+
+sigs_4 = run_deseq(counts4_df, metadata4_df, fetch_genes=True)
+vol_plot(sigs_4, label_genes=True)
+
+```
+#### Sorting genes by LFC (highest to lowest)
+Also excluding genes |LFC| < 1
+
+```{python}
+def sort_by_LFC(de_genes_df):
+  #pass sigs through this
+  
+  de_genes_df = de_genes_df[abs(de_genes_df["log2FoldChange"]) > 1]
+
+  sorted_df = de_genes_df.sort_values(by="log2FoldChange", ascending=False)
+  return sorted_df
+
+
+```
+#### Wrap gseapy enrichr tool around function 
+
+```{python}
+
+def run_enrichr(sigs):
+  sorted_genes_df = sort_by_LFC(sigs_4)
+
+  sorted_gene_symbols_df = get_genes(sorted_genes_df.index)
+
+  gene_syms = sorted_gene_symbols_df["external_gene_name"]
+
+
+  gene_syms_as_strings = []
+  #Some symbols not found so must filter 
+  for a in gene_syms:
+    if type(a) is str:
+      gene_syms_as_strings.append(a)
+
+  gene_syms = gene_syms_as_strings
+
+  enr = gp.enrichr(gene_list = gene_syms, gene_sets=['MSigDB_Hallmark_2020','KEGG_2021_Human', "GO_Biological_Process_2021"],organism = "human", outdir = None)
+
+  print(enr.results.head(20))
+
+  
+```
+#### Run ORA using enrichr
+
+```{python} 
+
+run_enrichr(sigs_1)
+
+```
+
+```{python} 
+
+run_enrichr(sigs_2)
+
+```
+
+```{python} 
+
+run_enrichr(sigs_3)
+
+```
+
+```{python} 
+
+run_enrichr(sigs_4)
+
+```
