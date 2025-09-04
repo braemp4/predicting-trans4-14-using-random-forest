@@ -133,6 +133,8 @@ def get_metadata(counts_a, counts_b):
   return metadata_df
 
 ``` 
+
+
 #### Get gene names - using gseapy's Biomart wrapper 
 
 ```{python}
@@ -147,7 +149,6 @@ def get_genes(ids):
 
 
 ```
-
 ###### pydeseq2 on counts and metadata
 
 ```{python}
@@ -173,8 +174,11 @@ def run_deseq(counts_df, metadata_df, fetch_genes: bool):
     
     print("Fetching names for differentially expressed genes...")
     gene_mapper = GeneScraper(gene_ids)
-
+  
     gene_names = gene_mapper.get_gene_names()
+
+    #gene_query = get_genes(gene_ids)
+    #gene_names = gene_query["external_gene_name"]
 
     print("Gene names obtained")
 
@@ -229,45 +233,8 @@ def vol_plot(sigs, label_genes: bool = False, hor_line: int = 2, vert_line_r: in
 
   plt.show()
    
+   
 ```
-
-##### Running analysis on +ve fish, -ve mode VS -ve fish, +ve model
-```{python}
-counts1_df, counts_1a, counts_1b = get_counts(group_1a, group_1b, rna_seq_df)
-metadata1_df = get_metadata(counts_1a, counts_1b)
-
-sigs_1 = run_deseq(counts1_df, metadata1_df, fetch_genes=True)
-#my gene map tool is practical for genes < 700
-
-vol_plot(sigs_1, label_genes=True)
-
-```
-
-
-##### Running analysis on +ve fish, +ve mode VS Improperly labelled
-```{python}
-
-counts2_df, counts_2a, counts_2b = get_counts(group_2a, group_2b, rna_seq_df)
-metadata2_df = get_metadata(counts_2a, counts_2b)
-
-sigs_2 = run_deseq(counts2_df, metadata2_df, fetch_genes=True)
-vol_plot(sigs_2, label_genes=True)
-
-```
-
-
-##### Running analysis on -ve fish, -ve model VS Improperly labelled
-```{python}
-
-counts3_df, counts_3a, counts_3b = get_counts(group_3a, group_3b, rna_seq_df)
-metadata3_df = get_metadata(counts_3a, counts_3b)
-
-sigs_3 = run_deseq(counts3_df, metadata3_df, fetch_genes=False)
-vol_plot(sigs_3, label_genes=False)
-
-```
-
-
 ##### Running analysis on -ve fish, -ve model (both negative) VS -ve fish +ve ML
 
 ```{python}
@@ -275,13 +242,16 @@ vol_plot(sigs_3, label_genes=False)
 counts4_df, counts_4a, counts_4b = get_counts(group_4a, group_4b, rna_seq_df)
 metadata4_df = get_metadata(counts_4a, counts_4b)
 
-sigs_4 = run_deseq(counts4_df, metadata4_df, fetch_genes=True)
+sigs_4 = run_deseq(counts4_df, metadata4_df, fetch_genes = True)
 vol_plot(sigs_4, label_genes=True)
 
-```
-#### Sorting genes by LFC (highest to lowest)
-Also excluding genes |LFC| < 1
+sigs_4["gene_names"]
 
+
+```
+
+
+#### Sorting genes by LFC (highest to lowest)
 ```{python}
 def sort_by_LFC(de_genes_df):
   #pass sigs through this
@@ -293,7 +263,8 @@ def sort_by_LFC(de_genes_df):
 
 
 ```
-#### Wrap gseapy enrichr tool around function 
+
+#### Run enrichr function with gene symbols
 
 ```{python}
 
@@ -315,32 +286,10 @@ def run_enrichr(sigs):
 
   enr = gp.enrichr(gene_list = gene_syms, gene_sets=['MSigDB_Hallmark_2020','KEGG_2021_Human', "GO_Biological_Process_2021"],organism = "human", outdir = None)
 
-  print(enr.results.head(40))
-
-  
-```
-#### Run ORA using enrichr
-
-```{python} 
-
-run_enrichr(sigs_1)
-
-```
-
-```{python} 
-
-run_enrichr(sigs_2)
-
-```
-
-```{python} 
-
-run_enrichr(sigs_3)
-
-```
-
-```{python} 
+  print(enr.results.head(20))
 
 run_enrichr(sigs_4)
+  
 
 ```
+
