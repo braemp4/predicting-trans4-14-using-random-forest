@@ -2,12 +2,12 @@
 
 ##### Importing Packages
 ```{python}
-from os import wait
-from anndata.utils import import_name
 import numpy as np
 import pandas as pd 
-from matplotlib import pyplot as plt 
 import json
+
+from matplotlib import pyplot as plt 
+from adjustText import adjust_text
 import seaborn as sns
 
 #pydeseq2 objects
@@ -26,6 +26,7 @@ from gseapy import Biomart
 
 ```{python}
 rna_seq_df = pd.read_csv("data/raw_rnaseq.csv")
+patient_data = pd.read_csv("data/BW_patientdata.csv")
 
 ids = rna_seq_df["Unnamed: 0"] 
 
@@ -46,6 +47,21 @@ patient_labels_rs = {}
 for label in patient_labels:
     if label[0] == "M":
         patient_labels_rs.update({label: patient_labels[label]})
+
+```
+
+###### Batch correcting counts
+
+```{python} 
+from inmoose.pycombat import pycombat_seq 
+patient_data["Country_Skerget"]
+patient_data["PUBLIC_ID"]
+
+#only include patients in both dataframes
+
+rna_seq_df = rna_seq_df[patient_data["PUBLIC_ID"]]
+
+rna_seq_df = pycombat_seq(rna_seq_df.astype("float64"), patient_data["Country_Skerget"])
 
 ```
 
@@ -219,9 +235,14 @@ def vol_plot(sigs, label_genes: bool = False, hor_line: int = 2, vert_line_r: in
   ax = sns.scatterplot(data = sigs, x = "log2FoldChange", y='nlog10', hue = "color", hue_order = ["low","high-down", "high-up"], palette = ["lightgrey", "mediumslateblue", "indianred"])
   if label_genes: 
     #adding gene name to each plot point 
+    text = []
     for i, v in sigs.iterrows():
         if v["nlog10"] >  5:
-            ax.text(v["log2FoldChange"], v["nlog10"],v["gene_names"], fontsize=6, ha="right")
+            text.append(ax.text(v["log2FoldChange"], v["nlog10"],v["gene_names"], fontsize=6, ha="right"))
+
+    adjust_text(text) 
+            
+        
 
   ax.axhline(hor_line, zorder = 0, c= "k", lw=1, ls= "--")
   ax.axvline(vert_line_r, zorder = 0, c= "k", lw=1, ls= "--")
