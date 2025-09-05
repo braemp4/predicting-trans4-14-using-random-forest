@@ -1,8 +1,9 @@
-
 ### Differential expression analysis 
 
 ##### Importing Packages
 ```{python}
+from os import wait
+from anndata.utils import import_name
 import numpy as np
 import pandas as pd 
 from matplotlib import pyplot as plt 
@@ -165,7 +166,6 @@ def run_deseq(counts_df, metadata_df, fetch_genes: bool):
   results_df = results_df[results_df.baseMean >= 10]
 
 
-
   sigs = results_df[(results_df.padj < 0.05) & (abs(results_df.log2FoldChange) > 0.5 )]
 
   if fetch_genes:
@@ -279,6 +279,82 @@ sigs_4 = run_deseq(counts4_df, metadata4_df, fetch_genes=True)
 vol_plot(sigs_4, label_genes=True)
 
 ```
+
+#### Gene set enrichment analysis
+
+
+#### Make func to run gsea
+
+- Rank genes in order of LFC x -nlog(p) 
+- Deal with duplicates 
+- run prerank func from gseapy
+
+```{python} 
+def run_gsea(sigs):
+
+  #Dealing with duplicate genes
+  sigs = sigs.drop_duplicates() #exact duplicates
+
+  #sigs = sigs.groupby(["gene_names"]).agg({"Log2FoldChange": "mean", "padj" : "mean" ... })
+
+  #create rank value for genes to be sorted by
+  sigs["Rank"] = sigs.nlog10 * sigs.log2FoldChange
+
+  sigs = sigs.sort_values("Rank", ascending=False)
+
+  ranking = sigs[["gene_names","Rank"]]
+
+
+  ranking = ranking[ranking["gene_names"] != "X"]
+
+  ranking = ranking.groupby(["gene_names"]).agg({"Rank": "mean"})
+
+  ranking = ranking.dropna(axis=0, how="any")
+
+  pre_res = gp.prerank(rnk = ranking, gene_sets=['MSigDB_Hallmark_2020','KEGG_2021_Human', "GO_Biological_Process_2021"], seed = 6)
+
+  output = [[entry, pre_res.results[entry]["fdr"], pre_res.results[entry]["es"], pre_res.results[entry]["nes"]] for entry in pre_res.results]
+
+  output_df = pd.DataFrame(output, columns = ["Term", "fdr", "es", "nes"]).sort_values("fdr").reset_index(drop=True)
+
+  return output_df
+
+```
+#### Run GSEA on each group
+```{python}
+
+gsea_1 = run_gsea(sigs_1)
+
+gsea_1
+
+```
+
+
+```{python}
+
+gsea_2 = run_gsea(sigs_2)
+
+gsea_2
+
+```
+
+
+```{python}
+
+#gsea_3 = run_gsea(sigs_3)
+
+#gsea_3
+
+```
+
+```{python}
+
+gsea_4 = run_gsea(sigs_4)
+
+gsea_4
+
+```
+
 #### Sorting genes by LFC (highest to lowest)
 Also excluding genes |LFC| < 1
 
@@ -323,24 +399,24 @@ def run_enrichr(sigs):
 
 ```{python} 
 
-run_enrichr(sigs_1)
+#run_enrichr(sigs_1)
 
 ```
 
 ```{python} 
 
-run_enrichr(sigs_2)
+#run_enrichr(sigs_2)
 
 ```
 
 ```{python} 
 
-run_enrichr(sigs_3)
+#run_enrichr(sigs_3)
 
 ```
 
 ```{python} 
 
-run_enrichr(sigs_4)
+#run_enrichr(sigs_4)
 
 ```
