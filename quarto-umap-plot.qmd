@@ -1,0 +1,44 @@
+```{python} 
+import numpy as np 
+import pandas as pd 
+from matplotlib import pyplot as plt 
+import umap 
+import umap.plot
+from inmoose.pycombat import pycombat_seq
+
+rna_seq_df = pd.read_csv("data/BW_RawData_CPM.csv")
+microarray_df = pd.read_csv("data/BW_GSE16400_expression.csv")
+
+rna_seq_df.dropna()
+microarray_df.dropna()
+
+#Merge data
+merged_df = rna_seq_df.merge(microarray_df)
+gene_names = merged_df[merged_df.columns[0]]
+index_name = merged_df.iloc[0][0]
+merged_df.drop(merged_df.columns[0], axis=1, inplace=True) #type: ignore
+merged_df = merged_df.rename(index = gene_names) #type: ignore
+
+patient_ids = merged_df.columns
+
+color_label = ["RNAseq" if name[0] == "M" else "Microarray" for name in patient_ids]
+color_label = pd.Series(color_label)
+
+merged_df = merged_df.dropna()
+
+#batch correction
+merged_df = pycombat_seq(merged_df.astype("float64"), color_label)
+
+merged_df = merged_df.transpose()
+
+#UMAP
+reducer = umap.UMAP()
+embedding = reducer.fit(merged_df)
+
+umap.plot.points(embedding, labels = color_label)
+
+#plt.scatter(embedding[:, 0],embedding[:,1]) #type: ignore 
+#plt.title("Gene expression UMAP")
+
+
+```
